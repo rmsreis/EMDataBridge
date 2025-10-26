@@ -14,7 +14,20 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Union, List, Optional, Tuple
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+"""
+Optional ML deps (transformers/hyperspy/h5py) are loaded lazily. This allows
+the package to be imported in environments without heavy ML dependencies.
+"""
+
+# Lazy ML imports - avoid raising at import time
+_TRANSFORMERS_AVAILABLE = False
+try:
+    # We don't import the specific classes at module import time to keep import
+    # lightweight. The EMDataStandardizer will attempt to import when needed.
+    import transformers  # type: ignore
+    _TRANSFORMERS_AVAILABLE = True
+except Exception:
+    _TRANSFORMERS_AVAILABLE = False
 
 # Import format-specific libraries
 try:
@@ -25,6 +38,7 @@ except ImportError:
 try:
     import hyperspy.api as hs
 except ImportError:
+    hs = None
     print("Warning: hyperspy not installed. DM3/DM4 format support will be limited.")
 
 try:
@@ -74,7 +88,7 @@ class EMDataStandardizer:
         }
     }
     
-    def __init__(self, llm_model_name: str = "bert-base-uncased"):
+    def __init__(self, llm_model_name: str = "bert-base-uncased", llm_backend: str = "auto", llm_model_path: str | None = None):
         """
         Initialize the standardizer with an optional LLM model for metadata extraction.
         
@@ -100,14 +114,13 @@ class EMDataStandardizer:
             ".azd": self._process_oxford,
         }
         
-        # Initialize LLM model for metadata extraction
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(llm_model_name)
-            self.llm_available = True
-        except Exception as e:
-            print(f"Warning: Could not load LLM model: {e}")
-            self.llm_available = False
+        # LLM configuration. The adapter is created lazily when needed.
+        # llm_backend: 'auto' | 'llama' | 'mock' | 'none'
+        self.llm_backend = llm_backend
+        self.llm_model_path = llm_model_path or os.environ.get("LLAMA_MODEL_PATH")
+        self.llm_adapter = None
+        # Legacy transformers model name (kept for backward compatibility)
+        self.llm_model_name = llm_model_name
     
     def standardize(self, file_path: Union[str, Path]) -> Dict[str, Any]:
         """
@@ -131,13 +144,63 @@ class EMDataStandardizer:
         # Process the file using the appropriate handler
         data, metadata = self.supported_formats[suffix](file_path)
         
-        # Use LLM to enhance metadata extraction if available
-        if self.llm_available:
-            metadata = self._enhance_metadata_with_llm(metadata)
+        # Optionally run LLM-based mapping if an adapter is available.
+        # Lazy-initialize the adapter depending on configuration and environment.
+        def _deep_update(d: dict, u: dict):
+            """Recursively update dict d with u, merging nested dicts."""
+            for k, v in u.items():
+                if isinstance(v, dict) and isinstance(d.get(k), dict):
+                    _deep_update(d[k], v)
+                else:
+                    d[k] = v
+
+        if self.llm_backend and self.llm_backend.lower() != "none":
+            # Lazily import adapter factory to avoid adding heavy deps to import time
+            try:
+                if self.llm_adapter is None:
+                    from .llm_adapter import get_llm_adapter, LLMAdapterError
+
+                    prefer = None
+                    if self.llm_backend.lower() == "mock":
+                        prefer = "mock"
+                    elif self.llm_backend.lower() == "llama":
+                        prefer = "llama"
+                    elif self.llm_backend.lower() == "auto":
+                        prefer = "llama" if self.llm_model_path else None
+
+                    if prefer:
+                        try:
+                            # Pass model_path if available for llama adapter
+                            if prefer == "llama":
+                                self.llm_adapter = get_llm_adapter(prefer="llama", model_path=self.llm_model_path)
+                            else:
+                                self.llm_adapter = get_llm_adapter(prefer=prefer)
+                        except Exception as e:
+                            print(f"Warning: could not initialize LLM adapter ({prefer}): {e}")
+                            self.llm_adapter = None
+
+                if self.llm_adapter is not None:
+                    try:
+                        mapping = self.llm_adapter.map_metadata(metadata)
+                        if isinstance(mapping, dict) and "canonical" in mapping:
+                            # Merge LLM-proposed canonical fields into metadata
+                            _deep_update(metadata, mapping.get("canonical", {}))
+                        # Capture provenance info for later attachment (after validation)
+                        prov = mapping.get("provenance") if isinstance(mapping, dict) else None
+                    except Exception as e:
+                        print(f"Warning: LLM mapping failed: {e}")
+                        prov = None
+            except Exception:
+                # Any failure to import adapters shouldn't break standardization
+                pass
         
         # Validate against standard schema
         standardized_metadata = self._validate_and_standardize_metadata(metadata)
-        
+
+        # Attach LLM provenance (if any) to the validated metadata for auditing
+        if 'prov' in locals() and prov:
+            standardized_metadata.setdefault("_llm_provenance", {}).update(prov)
+
         return {
             "data": data,
             "metadata": standardized_metadata,

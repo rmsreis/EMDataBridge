@@ -14,7 +14,25 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Union, List, Optional, Tuple
-from transformers import AutoTokenizer, AutoModel
+"""
+Translator module: guard heavy ML and IO libs (transformers, hyperspy) so the
+package can be imported without those optional dependencies. Load them lazily
+when translation or format-specific functions are invoked.
+"""
+
+# Lazy checks for optional deps
+_TRANSFORMERS_AVAILABLE = False
+try:
+    import transformers  # type: ignore
+    _TRANSFORMERS_AVAILABLE = True
+except Exception:
+    _TRANSFORMERS_AVAILABLE = False
+
+try:
+    import hyperspy.api as hs
+except ImportError:
+    hs = None
+    print("Warning: hyperspy not installed. DM3/DM4 format support will be limited.")
 
 # Import the standardizer for common functionality
 from standardizer import EMDataStandardizer

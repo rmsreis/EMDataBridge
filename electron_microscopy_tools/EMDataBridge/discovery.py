@@ -15,7 +15,13 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Union, List, Optional, Tuple, Set
 from collections import defaultdict
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+# Lazy-transformers import to avoid requiring heavy ML deps at package import
+_TRANSFORMERS_AVAILABLE = False
+try:
+    import transformers  # type: ignore
+    _TRANSFORMERS_AVAILABLE = True
+except Exception:
+    _TRANSFORMERS_AVAILABLE = False
 import networkx as nx
 import matplotlib.pyplot as plt
 from sklearn.cluster import DBSCAN
@@ -35,24 +41,22 @@ class EMDataDiscovery:
     extract metadata patterns, and infer relationships between files.
     """
     
-    def __init__(self, llm_model_name: str = "t5-small"):
+    def __init__(self, llm_model_name: str = "t5-small", llm_backend: str = "auto", llm_model_path: str | None = None):
         """
         Initialize the discovery tool with an optional LLM model for metadata analysis.
         
         Args:
             llm_model_name: Name of the pre-trained model to use for metadata analysis
         """
-        # Initialize the standardizer for common functionality
-        self.standardizer = EMDataStandardizer()
+        # Initialize the standardizer for common functionality, forwarding LLM config
+        self.standardizer = EMDataStandardizer(llm_model_name=llm_model_name, llm_backend=llm_backend, llm_model_path=llm_model_path)
         
-        # Initialize LLM model for metadata analysis
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(llm_model_name)
-            self.llm_available = True
-        except Exception as e:
-            print(f"Warning: Could not load LLM model: {e}")
-            self.llm_available = False
+        # Initialize LLM model lazily. Load only if transformers available and
+        # needed by downstream methods.
+        self.llm_available = False
+        self.tokenizer = None
+        self.model = None
+        self.llm_model_name = llm_model_name
         
         # Initialize TF-IDF vectorizer for text similarity
         self.vectorizer = TfidfVectorizer()

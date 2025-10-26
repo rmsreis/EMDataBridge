@@ -14,7 +14,14 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Union, List, Optional, Tuple
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+# Lazy-transformers import to avoid requiring heavy ML deps at package import
+_TRANSFORMERS_AVAILABLE = False
+try:
+    import transformers  # type: ignore
+    _TRANSFORMERS_AVAILABLE = True
+except Exception:
+    _TRANSFORMERS_AVAILABLE = False
 
 # Import format-specific libraries
 try:
@@ -100,14 +107,12 @@ class EMDataStandardizer:
             ".azd": self._process_oxford,
         }
         
-        # Initialize LLM model for metadata extraction
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(llm_model_name)
-            self.llm_available = True
-        except Exception as e:
-            print(f"Warning: Could not load LLM model: {e}")
-            self.llm_available = False
+        # Initialize LLM model lazily. Only attempt to load if transformers
+        # is available in the environment and the user requested LLM usage.
+        self.llm_available = False
+        self.tokenizer = None
+        self.model = None
+        self.llm_model_name = llm_model_name
     
     def standardize(self, file_path: Union[str, Path]) -> Dict[str, Any]:
         """
@@ -131,7 +136,20 @@ class EMDataStandardizer:
         # Process the file using the appropriate handler
         data, metadata = self.supported_formats[suffix](file_path)
         
-        # Use LLM to enhance metadata extraction if available
+        # Use LLM to enhance metadata extraction if available. Load the
+        # transformers model on demand to avoid requiring heavy dependencies
+        # for simple import/use cases.
+        if not self.llm_available and _TRANSFORMERS_AVAILABLE:
+            try:
+                from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+                self.tokenizer = AutoTokenizer.from_pretrained(self.llm_model_name)
+                self.model = AutoModelForSequenceClassification.from_pretrained(self.llm_model_name)
+                self.llm_available = True
+            except Exception as e:
+                # Keep llm_available False and continue without LLM enhancement
+                print(f"Warning: Could not load LLM model: {e}")
+
         if self.llm_available:
             metadata = self._enhance_metadata_with_llm(metadata)
         

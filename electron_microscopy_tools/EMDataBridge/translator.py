@@ -14,7 +14,14 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Union, List, Optional, Tuple
-from transformers import AutoTokenizer, AutoModel
+
+# Lazy-transformers import to avoid requiring heavy ML deps at package import
+_TRANSFORMERS_AVAILABLE = False
+try:
+    import transformers  # type: ignore
+    _TRANSFORMERS_AVAILABLE = True
+except Exception:
+    _TRANSFORMERS_AVAILABLE = False
 
 # Import the standardizer for common functionality
 from .standardizer import EMDataStandardizer
@@ -44,15 +51,15 @@ class EMFormatTranslator:
     metadata and applying appropriate transformations.
     """
     
-    def __init__(self, llm_model_name: str = "bert-base-uncased"):
+    def __init__(self, llm_model_name: str = "bert-base-uncased", llm_backend: str = "auto", llm_model_path: str | None = None):
         """
         Initialize the translator with an optional LLM model for metadata mapping.
         
         Args:
             llm_model_name: Name of the pre-trained model to use for metadata mapping
         """
-        # Initialize the standardizer for common functionality
-        self.standardizer = EMDataStandardizer(llm_model_name=llm_model_name)
+        # Initialize the standardizer for common functionality, forwarding LLM config
+        self.standardizer = EMDataStandardizer(llm_model_name=llm_model_name, llm_backend=llm_backend, llm_model_path=llm_model_path)
         
         # Define supported output formats and their handlers
         self.output_formats = {
@@ -73,14 +80,27 @@ class EMFormatTranslator:
             "azd": self._write_oxford,
         }
         
-        # Initialize LLM model for metadata mapping
+        # Initialize LLM model lazily. Only attempt to load if transformers is
+        # available and needed; this avoids requiring heavy ML deps on import.
+        self.llm_available = False
+        self.tokenizer = None
+        self.model = None
+        self.llm_model_name = llm_model_name
+
+    def _ensure_llm_loaded(self):
+        """Load transformers AutoTokenizer/AutoModel on demand."""
+        if self.llm_available:
+            return
+        if not _TRANSFORMERS_AVAILABLE:
+            return
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
-            self.model = AutoModel.from_pretrained(llm_model_name)
+            from transformers import AutoTokenizer, AutoModel
+
+            self.tokenizer = AutoTokenizer.from_pretrained(self.llm_model_name)
+            self.model = AutoModel.from_pretrained(self.llm_model_name)
             self.llm_available = True
         except Exception as e:
             print(f"Warning: Could not load LLM model: {e}")
-            self.llm_available = False
     
     def translate(self, input_file: Union[str, Path], output_file: Union[str, Path], 
                  output_format: Optional[str] = None) -> None:

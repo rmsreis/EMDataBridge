@@ -1,0 +1,15 @@
+name: emdatabridge-dev
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn
+  - pillow
+  - mrcfile
+  - h5py
+  - pytest
+  - pip:
+    - -e .
