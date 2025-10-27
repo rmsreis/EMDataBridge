@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtualenv
+.venv/
+env/
+venv/
+
+# macOS
+.DS_Store
+
+# pytest cache
+.pytest_cache/
+
+# Build artifacts
+/dist/
+/build/
+*.egg-info/
+
+# Byte-compiled / optimized / DLL files
+*.pyc
+
+# Editor directories
+.vscode/
+.idea/
