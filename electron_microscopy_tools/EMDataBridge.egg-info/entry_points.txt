@@ -1,0 +1,2 @@
+[console_scripts]
+emdb = EMDataBridge.cli:main
